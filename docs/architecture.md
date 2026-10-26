@@ -35,20 +35,72 @@ Comparisons: 0
 ```
 ┌─────────────────┐
 │   UI Layer      │  Streamlit interface
-│  (main.py)      │
+│  (interface/)   │
 └────────┬────────┘
          │
 ┌────────▼────────┐
 │  Core Layer     │  Feature extraction, model, active learning
-│ (features.py,   │
-│  model.py)      │
+│  (learning/,    │
+│ active_learning/│
 └────────┬────────┘
          │
 ┌────────▼────────┐
 │  Data Layer     │  SQLite database, Git submodule
-│  (database.py)  │
+│ (persistence/)  │
 └─────────────────┘
 ```
+
+## Canonical Package Map
+
+Use the package-owned modules below for new code. Top-level modules such as
+`st_name_ranking.database`, `st_name_ranking.features`, `st_name_ranking.model`,
+and `st_name_ranking.ui` are deprecated compatibility shims for older callers
+and tests.
+
+| Capability                          | Canonical module                                     |
+| ----------------------------------- | ---------------------------------------------------- |
+| Streamlit app entrypoint            | `st_name_ranking.interface.main`                     |
+| Tournament UI                       | `st_name_ranking.interface.tournament_ui`            |
+| Rankings UI                         | `st_name_ranking.interface.rankings_ui`              |
+| Binary filter UI                    | `st_name_ranking.interface.filter_ui`                |
+| Similarity-search UI                | `st_name_ranking.interface.similarity_ui`            |
+| UI app actions                      | `st_name_ranking.interface.app_actions`              |
+| Tournament state helpers            | `st_name_ranking.interface.tournament_session`       |
+| Tournament orchestration            | `st_name_ranking.interface.tournament_orchestration` |
+| Similarity search                   | `st_name_ranking.interface.similarity`               |
+| Active-learning selection           | `st_name_ranking.active_learning.selection`          |
+| Candidate queue                     | `st_name_ranking.active_learning.queue`              |
+| Comparison/model refresh            | `st_name_ranking.active_learning.lazy_updates`       |
+| Feature extraction                  | `st_name_ranking.learning.features`                  |
+| Bradley-Terry model                 | `st_name_ranking.learning.model`                     |
+| Name queue helpers                  | `st_name_ranking.interface.name_queue`               |
+| Schema/bootstrap facade             | `st_name_ranking.persistence.database`               |
+| Low-level connection state          | `st_name_ranking.persistence.connection`             |
+| Name/origin queries                 | `st_name_ranking.persistence.name_store`             |
+| Ratings and comparisons             | `st_name_ranking.persistence.ratings_store`          |
+| Preference analytics                | `st_name_ranking.persistence.preference_stats_store` |
+| User settings                       | `st_name_ranking.persistence.settings_store`         |
+| Database statistics                 | `st_name_ranking.persistence.stats_store`            |
+| Feature cache persistence           | `st_name_ranking.persistence.feature_store`          |
+| Database import/export              | `st_name_ranking.persistence.database_io`            |
+| Submodule sync state                | `st_name_ranking.persistence.sync_store`             |
+| Origin classification orchestration | `st_name_ranking.classification.classify_origins`    |
+| Origin classifier implementation    | `st_name_ranking.classification.origin_classifier`   |
+| CLI                                 | `st_name_ranking.commands.cli`                       |
+
+## Shared Package Modules
+
+Only a small set of package modules are stable shared infrastructure:
+
+| Module                                                | Owner and purpose                                                    |
+| ----------------------------------------------------- | -------------------------------------------------------------------- |
+| `st_name_ranking.types`                               | Shared record types used across interface, learning, and persistence |
+| `st_name_ranking.persistence.name_normalization`      | Shared name cleanup for submodule loading and persistence sync       |
+| `st_name_ranking.active_learning.phonetic_similarity` | Generic phonetic scoring used by active learning and tests           |
+
+Everything else at the package root is either internal compatibility support or
+a deprecated shim that forwards to a package-owned module. New code should not
+import those shim paths.
 
 ## Component Architecture
 
@@ -74,7 +126,7 @@ Stores 5 core tables:
 - **Incremental sync**: Processes only new or modified names
 - **Data provenance**: Maintains lineage from source data
 
-### Feature Extraction Layer (`features.py`)
+### Feature Extraction Layer (`learning/features.py`)
 
 #### FeatureExtractor Class
 
@@ -93,7 +145,7 @@ Stores 5 core tables:
 5. **Normalization**: Min-max scaling to [0,1] range
 6. **Vector assembly**: 25-dimensional feature vector
 
-### Machine Learning Layer (`model.py`)
+### Machine Learning Layer (`learning/model.py`)
 
 #### BradleyTerryModel Class
 
@@ -110,14 +162,18 @@ Stores 5 core tables:
 - **Sampling**: Thompson sampling for active learning
 - **Persistence**: Serializes state to database
 
-### Active Learning Layer (`utils.py`)
+### Active Learning Layer (`active_learning/`)
 
 #### Candidate Selection
 
-- **Thompson sampling**: Maximizes information gain
-- **Diversity constraint**: Ensures feature space coverage
-- **History avoidance**: Prevents repetitive comparisons
-- **Fallback**: Random selection if model fails
+- **Selection owner**: `active_learning/selection.py` owns feature lookup, model
+  access, Thompson sampling, and fallback pair selection.
+- **Background queue**: `active_learning/queue.py` keeps tournament pairs ready
+  for responsive voting and reports refill latency.
+- **Lazy updates**: `active_learning/lazy_updates.py` records comparisons,
+  refreshes the model, and synchronizes model-derived ratings.
+- **No root utilities facade**: active-learning helpers are imported from this
+  package directly; the old root `utils.py` facade has been removed.
 
 #### Rating Synchronization
 
@@ -125,7 +181,7 @@ Stores 5 core tables:
 - **Batch updates**: Processes all 44,000 names efficiently
 - **Consistency checks**: Validates rating calculations
 
-### User Interface Layer (`main.py`, `ui.py`)
+### User Interface Layer (`interface/`)
 
 - **Tournament interface**: Side-by-side name comparisons
 - **Tournament sample-size selector**: Options are 50, 100, 500, 1000, 2000,
@@ -136,7 +192,7 @@ Stores 5 core tables:
 - **Filter controls**: Gender and origin region filters
 - **Administration**: Database sync and classification controls
 
-### Command Line Interface (`cli.py`)
+### Command Line Interface (`commands/cli.py`)
 
 - `db init`: Initialize database (includes sync + feature extraction)
 - `db stats`: Display database statistics
@@ -145,6 +201,7 @@ Stores 5 core tables:
 - `db features status`: Show feature cache status
 - `db model status`: Show active learning model status
 - `db model reset`: Reinitialize active learning model
+- `db origins classify`: Classify unclassified name origins
 - `db import`: Import database from file
 
 ## Data Flow
@@ -162,7 +219,7 @@ def process_vote(name_a: str, name_b: str, preference: int) -> None:
     # preference: -1 (prefer a), 1 (prefer b), 0 (draw), 2 (down)
 
     # 3. Record comparison in database
-    database.record_comparison(name_a, name_b, preference)
+    ratings_store.record_comparison(name_a, name_b, preference)
 
     # 4. Update Bayesian model
     model.update_based_on_preference(name_a, name_b, preference)
@@ -196,7 +253,7 @@ def get_name_features(name: str) -> Any:
 
 ```python
 # 1. Record comparison with preference value
-database.record_comparison(name_a_id, name_b_id, preference)
+ratings_store.record_comparison(name_a, name_b, preference)
 
 # 2. Extract features for both names
 features_a = feature_extractor.extract(name_a)
@@ -382,12 +439,12 @@ $ uv run st-name-ranking db features rebuild
 ### Alternative Models
 
 1. Implement new model class with same interface
-2. Update `get_active_learning_model()` factory function
+2. Update `get_or_initialize_active_learning_model()` factory function
 3. Maintain backward compatibility
 
 ### UI Enhancements
 
-1. Add new **Streamlit** components to `ui.py`
+1. Add new **Streamlit** components to the focused module under `interface/`
 2. Extend filter options in sidebar
 3. Add new visualization components
 

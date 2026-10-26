@@ -4,12 +4,13 @@ Benchmark origin classification performance with phonetic caching.
 """
 
 import logging
-import random
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-logging.basicConfig(level=logging.WARNING)
+if TYPE_CHECKING:
+    from st_name_ranking.types import UnclassifiedName
 
 
 def benchmark_reference_names_load() -> tuple[
@@ -17,6 +18,8 @@ def benchmark_reference_names_load() -> tuple[
     float,
 ]:
     """Benchmark loading reference names with phonetic codes."""
+    from st_name_ranking.persistence.name_store import get_names_with_origins
+
     start = time.perf_counter()
     reference_names = get_names_with_origins(confidence_threshold=0.5)
     elapsed = time.perf_counter() - start
@@ -29,6 +32,8 @@ def benchmark_classification_batch(
     batch_size: int = 100,
 ) -> tuple[int, float]:
     """Benchmark classification of a batch of names."""
+    from st_name_ranking.classification.origin_classifier import OriginClassifier
+
     classifier = OriginClassifier(reference_names)
 
     total_names = len(names)
@@ -46,14 +51,14 @@ def benchmark_classification_batch(
     return total_names, elapsed
 
 
-def main():
+def main() -> None:
+    logging.basicConfig(level=logging.WARNING)
+
     # Add src to Python path for imports
     src_path = Path(__file__).parent.parent / "src"
     sys.path.insert(0, str(src_path))
-    from st_name_ranking.database import (
-        get_unclassified_names,
-        init_database,
-    )
+    from st_name_ranking.persistence.database import init_database
+    from st_name_ranking.persistence.name_store import get_unclassified_names
 
     print("=== Origin Classification Performance Benchmark ===\n")
 
@@ -73,18 +78,17 @@ def main():
 
     # Get unclassified names for testing
     print("3. Fetching unclassified names...")
-    unclassified = get_unclassified_names(limit=2000)  # Limit for benchmark
+    unclassified: list[UnclassifiedName] = get_unclassified_names(limit=2000)  # Limit for benchmark
     print(f"   Found {len(unclassified)} unclassified names (limited to 2000)")
 
     if len(unclassified) < 100:
         print("   Not enough unclassified names for benchmark.")
         return
 
-    # Select random subset for benchmark
+    # Select a stable spread across the result set so repeated benchmark runs compare like for like.
     sample_size = min(1000, len(unclassified))
-    random.seed(42)
-    sampled = random.sample(unclassified, sample_size)
-    sampled_names = [item["name"] for item in sampled]
+    sampled = [unclassified[index * len(unclassified) // sample_size] for index in range(sample_size)]
+    sampled_names = [item.name for item in sampled]
 
     print(f"4. Benchmarking classification of {sample_size} names...")
     total_names, elapsed = benchmark_classification_batch(

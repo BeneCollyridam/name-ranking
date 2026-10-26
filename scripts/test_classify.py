@@ -4,12 +4,12 @@ import sys
 from pathlib import Path
 
 
-def main():
+def main() -> None:
     # Add src to Python path for imports
     src_path = Path(__file__).parent.parent / "src"
     sys.path.insert(0, str(src_path))
 
-    from st_name_ranking.classify_origins import classify_all_names
+    from st_name_ranking.classification.classify_origins import classify_all_names
 
     logging.basicConfig(level=logging.INFO)
 

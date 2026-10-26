@@ -1,0 +1,124 @@
+"""FIFO queue for preloading names with pre-computed display properties."""
+
+from __future__ import annotations
+
+import logging
+from collections import deque
+from typing import TypedDict
+
+logger = logging.getLogger(__name__)
+
+
+class NameQueueItem(TypedDict):
+    """Pre-computed display properties for a queued name."""
+
+    name: str
+    index: int
+    status: bool | None
+    status_text: str
+    border_color: str
+    bg_color: str
+
+
+def compute_name_data(name: str, index: int, inclusions: dict[str, bool]) -> NameQueueItem:
+    """Pre-compute display properties for a name."""
+    status = inclusions.get(name)
+
+    if status is None:
+        border_color = "#757575"  # Gray
+        status_text = "Not decided"
+        bg_color = "#FAFAFA"
+    elif status is True:
+        border_color = "#4CAF50"  # Green
+        status_text = "Included"
+        bg_color = "#E8F5E9"
+    else:
+        border_color = "#F44336"  # Red
+        status_text = "Excluded"
+        bg_color = "#FFEBEE"
+
+    return {
+        "name": name,
+        "index": index,
+        "status": status,
+        "status_text": status_text,
+        "border_color": border_color,
+        "bg_color": bg_color,
+    }
+
+
+class NameQueue:
+    """FIFO queue for preloading names with pre-computed display properties.
+
+    This class maintains a queue of preloaded names for smooth navigation
+    through a list of names, particularly useful for Streamlit applications
+    where reruns can cause UI flickering.
+    """
+
+    def __init__(
+        self,
+        names: list[str],
+        current_index: int,
+        inclusions: dict[str, bool],
+        queue_size: int = 5,
+    ) -> None:
+        """Initialize the queue around the current name position."""
+        self._names = names
+        self._current_index = current_index
+        self._inclusions = inclusions
+        self._queue_size = queue_size
+        self._queue: deque[NameQueueItem] = deque()
+        self._total_names = len(names)
+
+        logger.debug(
+            "NameQueue initialized with %d names, current_index=%d, queue_size=%d",
+            self._total_names,
+            current_index,
+            queue_size,
+        )
+
+        self.preload_next()
+
+    @property
+    def current_index(self) -> int:
+        """Get the current index position."""
+        return self._current_index
+
+    @current_index.setter
+    def current_index(self, value: int) -> None:
+        """Set the current index position."""
+        self._current_index = max(0, min(value, self._total_names - 1))
+
+    def preload_next(self) -> None:
+        """Preload upcoming names in background (non-blocking).
+
+        Fills the queue up to queue_size with pre-computed name data.
+        """
+        target_size = self._queue_size
+
+        while len(self._queue) < target_size:
+            next_index = self._current_index + len(self._queue) + 1
+
+            if next_index >= self._total_names:
+                break
+
+            next_name = self._names[next_index]
+            name_data = compute_name_data(next_name, next_index, self._inclusions)
+            self._queue.append(name_data)
+
+        logger.debug(
+            "Preloaded %d names (queue size: %d)",
+            len(self._queue),
+            self._queue_size,
+        )
+
+    def has_more(self) -> bool:
+        """Return whether there are names after the current position."""
+        return self._current_index < self._total_names - 1
+
+    def update_inclusions(self, inclusions: dict[str, bool]) -> None:
+        """Update inclusion state and refresh queued display data."""
+        self._inclusions = inclusions
+        self._queue.clear()
+        self.preload_next()
+        logger.debug("Updated inclusions and refreshed queue")

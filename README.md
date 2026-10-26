@@ -1,5 +1,7 @@
 # Name Ranking
 
+[![Docs](https://img.shields.io/badge/docs-live-2ea44f)](https://jakob1379.github.io/name-ranking)
+
 Rank Danish names using **Bayesian preference learning**.
 
 ## Quickstart
@@ -13,6 +15,9 @@ $ cd sort-names
 
 # Install dependencies
 $ uv sync
+
+# Optional: enable the ethnicolr fallback classifier
+$ uv sync --extra origin-classification
 
 # Initialize database (computes features automatically)
 $ uv run st-name-ranking db init

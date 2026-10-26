@@ -1,5 +1,6 @@
 """Pytest fixtures for st_name_ranking tests."""
 
+import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -20,31 +21,26 @@ def temp_db_path():
 
 @pytest.fixture
 def mock_db_path(temp_db_path):
-    """Mock the database path in st_name_ranking.database."""
-    from st_name_ranking import database
+    """Mock the database path in st_name_ranking.persistence.database."""
+    from st_name_ranking.persistence import database
 
-    original_path = database.DB_PATH
+    original_path = database.get_db_path()
 
-    # Patch the DB_PATH
-    database.DB_PATH = temp_db_path
-    # Reset initialization flag
-    database.init_database._initialized = False
+    database.set_db_path(temp_db_path)
 
     yield temp_db_path
 
-    # Restore original path
-    database.DB_PATH = original_path
-    database.init_database._initialized = False
+    database.set_db_path(original_path)
 
 
 @pytest.fixture
 def initialized_db(mock_db_path):
     """Initialize a fresh database with schema."""
-    from st_name_ranking import utils
-    from st_name_ranking.database import get_connection, init_database
+    from st_name_ranking.active_learning import selection
+    from st_name_ranking.persistence.database import get_connection, init_database
 
-    # Clear feature extractor cache to prevent stale data between tests
-    utils.get_feature_extractor._cache = None
+    # Clear active-learning caches to prevent stale data between tests.
+    selection.reset_active_learning_state()
 
     init_database()
 
@@ -118,6 +114,23 @@ def mock_submodule_path(tmp_path):
     import json
 
     json_file.write_text(json.dumps(json_data, indent=2))
+    subprocess.run(["git", "init"], cwd=submodule_path, check=True, capture_output=True)
+    subprocess.run(["git", "add", "."], cwd=submodule_path, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.invalid",
+            "commit",
+            "-m",
+            "test names fixture",
+        ],
+        cwd=submodule_path,
+        check=True,
+        capture_output=True,
+    )
 
     return submodule_path
 
@@ -125,16 +138,15 @@ def mock_submodule_path(tmp_path):
 @pytest.fixture
 def mock_classifier():
     """Mock the ethnidata classifier to avoid missing database file."""
-    from st_name_ranking import classify_origins, origin_classifier
+    from st_name_ranking.classification import origin_classifier
 
     # Clear singleton cache to ensure fresh classifier
-    origin_classifier.get_classifier._cache = None
-    classify_origins.get_classifier._cache = None
+    origin_classifier.reset_classifier_cache()
 
     # The classifier expects a callable that returns (region, confidence) tuple
     mock_instance = MagicMock(return_value=("European", 0.85))
     with patch(
-        "st_name_ranking.origin_classifier._create_ethnidata_classifier",
+        "st_name_ranking.classification.origin_classifier._create_ethnidata_classifier",
         return_value=mock_instance,
     ):
         yield mock_instance
@@ -147,7 +159,7 @@ def mock_classifier():
 
 
 def pytest_addoption(parser):
-    """Add command-line options for integration tests."""
+    """Add command-line options for opt-in test groups."""
     parser.addoption(
         "--run-integration",
         action="store_true",
@@ -159,6 +171,12 @@ def pytest_addoption(parser):
         action="store_true",
         default=False,
         help="Run Playwright tests (requires browser installation)",
+    )
+    parser.addoption(
+        "--run-performance",
+        action="store_true",
+        default=False,
+        help="Run performance tests with timing-sensitive assertions",
     )
     parser.addoption(
         "--app-url",
@@ -177,14 +195,24 @@ def pytest_configure(config):
         "markers",
         "playwright: mark test as Playwright test (requires browser)",
     )
+    config.addinivalue_line(
+        "markers",
+        "performance: mark test as performance test (timing-sensitive)",
+    )
 
 
 def pytest_collection_modifyitems(config, items):
-    """Skip integration and Playwright tests unless explicitly requested."""
+    """Skip opt-in test groups unless explicitly requested."""
     skip_integration = pytest.mark.skip(reason="Need --run-integration option to run")
     skip_playwright = pytest.mark.skip(reason="Need --run-playwright option to run")
+    skip_performance = pytest.mark.skip(reason="Need --run-performance option to run")
 
     for item in items:
+        if _is_path_opt_in_integration(item):
+            item.add_marker(pytest.mark.integration)
+        if _is_path_opt_in_performance(item):
+            item.add_marker(pytest.mark.performance)
+
         # Skip integration tests unless --run-integration is set
         if "integration" in item.keywords and not config.getoption("--run-integration"):
             item.add_marker(skip_integration)
@@ -192,6 +220,24 @@ def pytest_collection_modifyitems(config, items):
         # Skip playwright tests unless --run-playwright is set
         if "playwright" in item.keywords and not config.getoption("--run-playwright"):
             item.add_marker(skip_playwright)
+
+        # Skip performance tests unless --run-performance is set
+        if "performance" in item.keywords and not config.getoption("--run-performance"):
+            item.add_marker(skip_performance)
+
+
+def _is_path_opt_in_integration(item) -> bool:
+    """Return whether a collected item lives in an opt-in integration directory."""
+    path = Path(str(item.path))
+    parts = path.parts
+    return any(part == "tests" and parts[index + 1] in {"integration", "e2e"} for index, part in enumerate(parts[:-1]))
+
+
+def _is_path_opt_in_performance(item) -> bool:
+    """Return whether a collected item lives in the opt-in performance directory."""
+    path = Path(str(item.path))
+    parts = path.parts
+    return any(part == "tests" and parts[index + 1] == "performance" for index, part in enumerate(parts[:-1]))
 
 
 @pytest.fixture
